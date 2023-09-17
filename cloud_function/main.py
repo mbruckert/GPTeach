@@ -231,7 +231,7 @@ def main():
 
     current_directory = os.getcwd()
     all_files = os.listdir(current_directory)
-    files_to_delete = [file for file in all_files if file.startswith("VideoVisual_") or file.startswith("en-US-Studio-M")]
+    files_to_delete = [file for file in all_files if file.startswith("final") or file.startswith("en-US-Studio-M")]
     for file in files_to_delete:
         try:
             os.remove(file)
