@@ -57,55 +57,59 @@ function App() {
     setAnswerChoices(output.answerChoices);
     }
 
-  async function checkAnswer(question, answerChoices, selectedOption){
-    //convert question to url format
-    fetch('https://corsproxy.io/?' + encodeURIComponent("https://www.wolframalpha.com/api/v1/llm-api?input=" + encodeURIComponent(question) + "&appid=EKVAQ3-853KWTJT6P")).then((response) => {
-      return response.text();
-    }).then(async (data) => {
-      setCorrectAnswer(data);
-
-      const booleanParser = StructuredOutputParser.fromNamesAndDescriptions({
-        correct: "a true or false boolean stating whether the given answer for the question is correct.",
-        correctAnswer: "the correct answer for the given question.",
-        explanation: "why the given answer is correct, over the selected answer.",
-      });
-      
-      const correctFormatInstructions = booleanParser.getFormatInstructions();
+    async function checkAnswer(question, answerChoices, selectedOption) {
+      return new Promise(async (resolve, reject) => {
+        try {
+          const response = await fetch('https://corsproxy.io/?' + encodeURIComponent("https://www.wolframalpha.com/api/v1/llm-api?input=" + encodeURIComponent(question) + "&appid=EKVAQ3-853KWTJT6P"));
+          const data = await response.text();
     
-      const correctPrompt = new PromptTemplate({
-        template:
-          "You are given the question: {question} and the answer choices: {answerChoices}. You are asked to select the correct answer choice. Information that might provide the correct answer is provided here (only use this information if the problem involves a calculation, conversion, or something similar - otherwise use your own knowledge): {correctAnswer}. OUTPUT JSON THAT I COULD DIRECTLY COPY AND PASTE INTO A VALIDATOR, WITH NO OTHER TEXT INCLUDING MARKDOWN. YOUR OUTPUT MUST START WITH A BRACKET AND END WITH A BRACKET.\n{format_instructions}\n Is the given answer choice correct (it needs to be exactly correct, not close)? {answerChoice} \n\n ",
-        inputVariables: ["question", "answerChoices", "correctAnswer", "answerChoice"],
-        partialVariables: { format_instructions: correctFormatInstructions },
+          setCorrectAnswer(data);
+    
+          const booleanParser = StructuredOutputParser.fromNamesAndDescriptions({
+            correct: "a true or false boolean stating whether the given answer for the question is correct.",
+            correctAnswer: "the correct answer for the given question.",
+            explanation: "why the given answer is correct, over the selected answer.",
+          });
+    
+          const correctFormatInstructions = booleanParser.getFormatInstructions();
+    
+          const correctPrompt = new PromptTemplate({
+            template:
+              "You are given the question: {question} and the answer choices: {answerChoices}. You are asked to select the correct answer choice. Information that might provide the correct answer is provided here (only use this information if the problem involves a calculation, conversion, or something similar - otherwise use your own knowledge): {correctAnswer}. OUTPUT JSON THAT I COULD DIRECTLY COPY AND PASTE INTO A VALIDATOR, WITH NO OTHER TEXT INCLUDING MARKDOWN. YOUR OUTPUT MUST START WITH A BRACKET AND END WITH A BRACKET.\n{format_instructions}\n Is the given answer choice correct (it needs to be exactly correct, not close)? {answerChoice} \n\n ",
+            inputVariables: ["question", "answerChoices", "correctAnswer", "answerChoice"],
+            partialVariables: { format_instructions: correctFormatInstructions },
+          });
+    
+          const input = await correctPrompt.format({
+            question: question,
+            answerChoices: answerChoices,
+            correctAnswer: data,
+            answerChoice: selectedOption
+          });
+    
+          console.log(input);
+    
+          const model = new OpenAI({ temperature: 0, openAIApiKey: process.env.REACT_APP_OPENAI_API_KEY });
+          const openAIResponse = await model.call(input);
+          const output = JSON.parse(openAIResponse);
+    
+          if (output.correct === "true") {
+            setShowConfetti(true);
+            setTimeout(() => {
+              setShowConfetti(false);
+            }, 5000);
+          }
+    
+          setValidatedAnswer(output);
+          resolve(output);
+        } catch (error) {
+          reject(error);
+        }
       });
-
-      const input = await correctPrompt.format({
-        question: question,
-        answerChoices: answerChoices,
-        correctAnswer: data,
-        answerChoice: selectedOption
-      });
-
-      console.log(input);
-
-      const model = new OpenAI({ temperature: 0, openAIApiKey: process.env.REACT_APP_OPENAI_API_KEY });
-      
-      const response = await model.call(input);
-  
-      const output = JSON.parse(response);
-
-      if(output.correct == "true"){
-        setShowConfetti(true);
-        setTimeout(() => {
-          setShowConfetti(false);
-        }, 5000);
-      }
-
-      setValidatedAnswer(output);
-    });
-  }
+    }
 
   async function generateVideo(){
+    toast.success('Generating your video! This may take a few minutes.');
     setTimeout(() => {
       setLoadedVideo(true);
     }, 5000);
@@ -201,9 +205,11 @@ function App() {
                 if(selectedOption == ""){
                   toast.error('You must select an answer choice!');
                 } else{
+                  toast.promise(checkAnswer(question, answerChoices, selectedOption), {loading: "Checking your answer with Wolfram Alpha, please wait a moment...", success: "Your answer has been checked!", error: "There was an error checking your answer, please try again."});
                   checkAnswer(question, answerChoices, selectedOption);
                 }
               }} onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.63)'} onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.43)'} style={{borderRadius: "10px", border: "1px solid #127C01", background: "rgba(255, 255, 255, 0.43)", fontWeight: '700', color: '#127C01', height: '40px', fontSize: '18px', marginTop: '15px', width: '150%', cursor: 'pointer'}}>Check my Answer</button>
+
               {Object.keys(validatedAnswer).length > 0 && <div style={{marginTop: '20px', textAlign: 'left'}}>
                 <div style={{backgroundColor: 'white', padding: '5px', width: '180%', borderRadius: '10px', textAlign: 'center'}}><h3>Your Answer is... {validatedAnswer.correct == "true" ? <span style={{color: '#127C01'}}>Correct!</span> : <span style={{color: '#C11111'}}>Incorrect :(</span>}</h3></div>
                 {validatedAnswer.correct == "false" && <h4 style={{width: '150%'}}>Correct Answer: {validatedAnswer.correctAnswer}</h4>}
