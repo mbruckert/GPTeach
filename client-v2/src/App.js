@@ -24,6 +24,7 @@ function App() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [loadedVideo, setLoadedVideo] = useState(false);
   const [loadedAnswer, setLoadedAnswer] = useState(false);
+  const [videoUrl, setVideoUrl] = useState("");
 
   const { width, height } = useWindowSize()
 
@@ -111,9 +112,17 @@ function App() {
 
   async function generateVideo(){
     toast.success('Generating your video! This may take a few minutes.');
-    setTimeout(() => {
+    fetch("https://generatevideo-ahaig2rvna-uc.a.run.app/generatevideo", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({"request": topic})
+    }).then((response) => response.json()).then((data) => {
       setLoadedVideo(true);
-    }, 5000);
+      setVideoUrl(data.video_url);
+      toast.success('Your video has been generated!');
+    });
   }
 
   return (
@@ -195,7 +204,7 @@ function App() {
                 <div style={{marginTop: '-20px'}}>
                   <Player>
                     <BigPlayButton position="center" />
-                    <source src={process.env.PUBLIC_URL+ "/demo.mp4"} />
+                    <source src={videoUrl} />
                   </Player>
                 </div>
               </div>
