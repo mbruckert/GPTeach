@@ -1,5 +1,6 @@
 import ast
 import re
+import subprocess
 from typing import Sequence
 import os
 import shutil
@@ -28,7 +29,6 @@ from dotenv import load_dotenv
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from pydub import AudioSegment
-from moviepy.editor import *
 import uuid
 from google.cloud import storage
 
@@ -42,6 +42,8 @@ bucket_name = "shellhacks-2023"
 class Scene(BaseModel):
     visuals: str = Field(..., description="Description of the visuals to accompany the script. These visuals can be anything possible in manim")
     audio: str = Field(..., description="Script for this scene. Include what you want the narrator to say.")
+    # info: str = Field(..., description="Information you want to cover in this section. If this section is explaining a topic, include everything")
+    # sceneType: str = Field(..., description="Type of scene. Options are: text, example, practice probl;")
 
 class Storyboard(BaseModel):
     scenes: List[Scene]
@@ -128,12 +130,15 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
     qa_chain = RetrievalQA.from_chain_type(llm=chat, chain_type="stuff", retriever=vectorstore.as_retriever(), chain_type_kwargs=chain_type_kwargs)
 
     segment_generated = False
-    retries = -1
+    retries = 0
     errors = []
 
     while not segment_generated:
-        retries += 1
-        
+        # break if too many retries
+        if retries > 10:
+            break
+
+        # generate manim code
         agent_query = f"""Write code to create the following visuals in Manim. Make the visuals as detailed as possible to fully illustrate the point.
     
 {scene.visuals}. The animation should last for {duration_seconds} seconds."""
@@ -141,72 +146,36 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
         if len(errors) > 0:
             agent_query += f"\n\nYou failed at this task when you attempted it previously. Here are the errors your past attempts have generated.: {errors}"
 
-        manim_code = qa_chain.run(agent_query)
-
         try:
+            manim_code = qa_chain.run(agent_query)
+
+            # process manim code and write it to file
             parsed_code = fixing_parser.parse(manim_code)
-
-#             ai_code = parsed_code.code.split("def construct(self):")[1].split('if __name__ == "__main__":')[0]
-
-#             correct_code = f"""from manim import *
-
-# class VideoVisual_{segment}(Scene):
-#     def construct(self):
-#         {ai_code}
-
-# if frame == "main":
-#     from manim import config
-
-#     config.pixel_height = 1080
-#     config.pixel_width = 1920
-
-#     scene = VideoVisual_{segment}()
-#     scene.render()"""
 
             with open(f"exec_test_{segment}.py", 'w') as pyfile:
                 pyfile.write(parsed_code.code)
 
+            # execute manim code
             os.system(f"python exec_test_{segment}.py")
+            segment_generated = True
         except Exception as e:
             errors.append(str(e))
+            retries += 1
             continue
 
-        if os.path.isfile(f"media/videos/1080p60/VideoVisual_{segment}.mp4"):
-            segment_generated = True
-        else:
-            retries += 1
-
-        if retries > 10:
-            raise Exception("Unable to generate video segment")
-
-    # overlay audio onto video
-    video = VideoFileClip(f"media/videos/1080p60/VideoVisual_{segment}.mp4")
-    audio = AudioFileClip(filename)
-
-    # Set the audio of the video to the provided audio
-    final_video = video.set_audio(audio)
-    
-    # Write the result to a file
-    final_video.write_videofile(f"final_{segment}.mp4", codec='libx264')
+    if os.path.isfile(f"media/videos/1080p60/VideoVisual_{segment}.mp4"):
+        # # overlay audio onto video
+        # video = VideoFileClip(f"media/videos/1080p60/VideoVisual_{segment}.mp4")
+        # audio = AudioFileClip(filename)
+        # # Set the audio of the video to the provided audio
+        # final_video = video.set_audio(audio)
+        
+        # # Write the result to a file
+        # final_video.write_videofile(f"final_{segment}.mp4", codec='libx264')
+        subprocess.call(["ffmpeg", "-i", f"media/videos/1080p60/VideoVisual_{segment}.mp4", "-i", f"en-US-Studio-M_{segment}.wav", "-c:v", "copy", "-filter:a", "aresample=async=1", "-c:a", "flac", "-strict", "-2", f"final_{segment}.mp4"])
 
 @app.route('/generatevideo', methods=['POST'])
 def main():
-    # handle CORS preflight
-    # if request.method == 'OPTIONS':
-    #     headers = {
-    #         'Access-Control-Allow-Origin': '*',
-    #         'Access-Control-Allow-Methods': 'GET',
-    #         'Access-Control-Allow-Headers': 'Content-Type',
-    #         'Access-Control-Max-Age': '3600'
-    #     }
-
-    #     return ('', 204, headers)
-
-    # # set CORS return headers
-    # cors_headers = {
-    #     'Access-Control-Allow-Origin': '*'
-    # }
-
     req_body = request.get_json()
     user_request = req_body['request']
 
@@ -231,7 +200,7 @@ def main():
 
     current_directory = os.getcwd()
     all_files = os.listdir(current_directory)
-    files_to_delete = [file for file in all_files if file.startswith("final") or file.startswith("en-US-Studio-M")]
+    files_to_delete = [file for file in all_files if file.startswith("final") or file.startswith("en-US-Studio-M") or file.startswith("exec_test_")]
     for file in files_to_delete:
         try:
             os.remove(file)
@@ -242,33 +211,43 @@ def main():
     # generate video segments
     # for segment, scene in zip(segments, scenes):
     #     generate_video_segment(segment, scene)
-    with ThreadPoolExecutor(10) as executor:
-        futures = executor.map(generate_video_segment, segments, scenes)
-        wait(futures)
+    with ThreadPoolExecutor(5) as executor:
+        executor.map(generate_video_segment, segments, scenes)
+
+    print(os.listdir())
 
     # concatenate the video segments
-    video_clips = []
+    video_clips_str = ""
     for segment in segments:
-        try:
-            video_clips.append(VideoFileClip(f"final_{segment}.mp4"))
-        except:
-            continue
-    final_video = concatenate_videoclips(video_clips, method='compose')
+        if os.path.isfile(f"final_{segment}.mp4"):
+            video_clips_str += f"file 'final_{segment}.mp4'\n"
+    with open("video_clips.txt", "w") as f:
+        f.write(video_clips_str)
+    subprocess.call(["ffmpeg", "-f", "concat", "-safe", "0", "-i", "video_clips.txt", "-c", "copy", "-strict", "-2", "final.mp4"])
 
-    # output the video
-    final_video.write_videofile("final.mp4", codec='libx264')
+    # video_clips = []
+    # for segment in segments:
+    #     try:
+    #         video_clips.append(VideoFileClip(f"final_{segment}.mp4"))
+    #     except:
+    #         continue
+    # final_video = concatenate_videoclips(video_clips, method='compose')
+    # # output the video
+    # final_video.write_videofile("final.mp4", codec='h264')
 
     # upload the video to cloud storage and return the download link
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(f"{uuid.uuid4()}.mp4")
     blob.upload_from_filename("final.mp4")
+    blob.make_public()
     video_url = blob.public_url
+    print(video_url)
 
     return jsonify({"status": "success", "video_url": video_url}), 200
 
-# # main("What is a vector field in calculus? Give a couple examples of different vector fields.")
-# main("Visually explain t-tests in statistics.")
+# main("What is a vector field in calculus? Give a couple examples of different vector fields.")
+# main("Explain long division")
 
 if __name__ == "__main__":
     app.run(debug=True)
