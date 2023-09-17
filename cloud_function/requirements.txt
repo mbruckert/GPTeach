@@ -1,0 +1,7 @@
+google-cloud-texttospeech>=2.14.1
+langchain>=0.0.292
+python-dotenv>=1.0.0
+pydub>=0.25.1
+moviepy>=1.0.3
+openai>=0.28.0
+google-cloud-storage>=2.10.0
