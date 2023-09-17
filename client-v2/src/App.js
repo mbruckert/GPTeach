@@ -122,6 +122,8 @@ function App() {
       setLoadedVideo(true);
       setVideoUrl(data.video_url);
       toast.success('Your video has been generated!');
+    }).catch((error) => {
+      toast.error('There was an error generating your video, please try again.');
     });
   }
 
