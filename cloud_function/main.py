@@ -2,7 +2,7 @@ import ast
 from collections import OrderedDict
 import re
 import subprocess
-from typing import Optional, Sequence, Type
+from typing import Dict, Optional, Sequence, Type
 import os
 import shutil
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = "shellhacks-2023-042c64c6e9eb.json"
@@ -17,7 +17,7 @@ from langchain.callbacks.manager import (
     CallbackManagerForToolRun,
 )
 from typing import List
-from langchain import PromptTemplate
+from langchain import LLMChain, PromptTemplate
 from langchain.prompts.chat import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -56,6 +56,10 @@ bucket_name = "shellhacks-2023"
 class Answer(BaseModel):
     steps: list[str] = Field(description="The list of steps to solve the problem.")
     answer: str = Field(description="The answer to the problem.")
+
+class Script(BaseModel):
+    script: str = Field(description="The script used in this scene of the video.")
+    animation_times: Dict[str, int] = Field(description="A dictionary mapping the name of each animation to the time it takes to complete that animation in seconds. This should be generated to ensure the animations line up with your voiceover.")
 
 class WolframStepsRequest(BaseModel):
     question: str = Field(description="The question to be asked to Wolfram Alpha's step-by-step API. You should simplify the user's question as much as possible before passing it to this API e.g. plug in any values into equations, remove any words not absolutely necessary in the problem.")
@@ -140,22 +144,53 @@ class CodeResponse(BaseModel):
         return v
 
 def generate_video_segment(segment: int, scene: Scene):
+    script_parser = PydanticOutputParser(pydantic_object=Script)
+
+    # get the script for the segment
     if scene.sceneType == SceneType.problem:
         Tools = [WolframStepsWrapper()]
-        parser = PydanticOutputParser(pydantic_object=Answer)
-        prefix = f"Use Wolfram Alpha to solve the given question and return the steps as well as the answer. You MUST respond with this output format: {parser.get_format_instructions()}"
+        answer_parser = PydanticOutputParser(pydantic_object=Answer)
+        prefix = f"Use Wolfram Alpha to solve the given question and return the steps as well as the answer. You MUST respond with this output format: {answer_parser.get_format_instructions()}"
         agent = initialize_agent(Tools, ChatOpenAI(model="gpt-4"), agent=AgentType.OPENAI_FUNCTIONS, verbose=True, agent_kwargs={
             "system_message": SystemMessage(content=prefix)
         })
-        resp = agent.run("Calculate the compound interest for a principal amount of $5000 with an annual interest rate of 5% compounded annually for 3 years using the formula: A = P (1 + r/n)^(nt).")
+        wolfram_answer = answer_parser.parse(agent.run(scene.problem))
 
-    # get the audio for the segment
+        chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template("""Generate a script for this problem scene, and the timing of the steps of the problem (and animations, if any) in the scene to match it.
+Here are the steps to the problem:
+{steps}
+                                                      
+Answer: {answer}
+                                                      
+You MUST respond with this output format: {format_instructions}"""),
+            HumanMessagePromptTemplate.from_template("{scene_info}")
+        ])
+        messages = chat_prompt.format_prompt(format_instructions=script_parser.get_format_instructions(), steps=wolfram_answer.steps, answer=wolfram_answer.answer, scene_info=scene.info).to_messages()
+    elif scene.sceneType == SceneType.example:
+        chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template("""Generate a script for this example scene, and the timing of the animations in the scene to match it.
+
+You MUST respond with this output format: {format_instructions}"""),
+            HumanMessagePromptTemplate.from_template("{scene_info}")
+        ])
+        messages = chat_prompt.format_prompt(format_instructions=script_parser.get_format_instructions(), scene_info=scene.info).to_messages()
+    else:
+        chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template("""Generate a script for this text scene, and the timing of the appearance of text and equations in the scene to match it.
+                                                      
+You MUST respond with this output format: {format_instructions}"""),
+            HumanMessagePromptTemplate.from_template("{scene_info}")
+        ])
+        messages = chat_prompt.format_prompt(format_instructions=script_parser.get_format_instructions(), scene_info=scene.info).to_messages()
+
+    script = script_parser.parse(chat(messages).content)
     # get the visuals for the segment
 
     # set up tts voice
     voice_name = "en-US-Studio-M"
     language_code = "-".join(voice_name.split("-")[:2])
-    text_input = tts.SynthesisInput(text=scene.audio)
+    text_input = tts.SynthesisInput(text=script.script)
     voice_params = tts.VoiceSelectionParams(
         language_code=language_code, name=voice_name
     )
@@ -178,8 +213,8 @@ def generate_video_segment(segment: int, scene: Scene):
     duration_seconds = len(audio) / 1000
     
     # generate visuals
-    parser = PydanticOutputParser(pydantic_object=CodeResponse)
-    fixing_parser = OutputFixingParser.from_llm(parser=parser, llm=chat)
+    answer_parser = PydanticOutputParser(pydantic_object=CodeResponse)
+    fixing_parser = OutputFixingParser.from_llm(parser=answer_parser, llm=chat)
 
     prompt_template = """Using the information below, fill in and return the TEMPLATE below to generate the visuals REQUESTED by the user. The code you return will then be executed in a standalone file, SO IT MUST BE CORRECT AND COMPLETE.
 
@@ -213,7 +248,7 @@ REQUEST:
 
 ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
     PROMPT = PromptTemplate(
-        template=prompt_template, input_variables=["context", "question"], partial_variables={"format_instructions": parser.get_format_instructions()}
+        template=prompt_template, input_variables=["context", "question"], partial_variables={"format_instructions": answer_parser.get_format_instructions()}
     )
     chain_type_kwargs = {"prompt": PROMPT}
     qa_chain = RetrievalQA.from_chain_type(llm=chat, chain_type="stuff", retriever=vectorstore.as_retriever(), chain_type_kwargs=chain_type_kwargs)
@@ -228,9 +263,36 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
             break
 
         # generate manim code
-        agent_query = f"""Write code to create the following visuals in Manim. Make the visuals as detailed as possible to fully illustrate the point.
-    
-{scene.visuals}. The animation should last for {duration_seconds} seconds."""
+        if scene.sceneType == SceneType.problem:
+            agent_query = """Write code to create the following visuals in Manim for this problem scene. Make detailed visuals to fully illustrate solving the problem and go along with the narration
+
+Scene Info: """+scene.info+"""
+
+Script: """+script.script+"""
+
+Animation Timing: """+str(script.animation_times)+f"""
+        
+The animation should last for no longer than {duration_seconds} seconds, even if that time table doesn't agree with the animation timing."""
+        elif scene.sceneType == SceneType.example:
+            agent_query = """Write code to create the following visuals in Manim for this example scene. Make the visuals as detailed as possible to fully illustrate the point. The visuals should be fully animated and colorful.
+        
+Scene Info: """+scene.info+"""
+
+Script: """+script.script+"""
+
+Animation Timing: """+str(script.animation_times)+f"""
+
+The animation should last for no longer than {duration_seconds} seconds, even if that time table doesn't agree with the animation timing."""
+        else:
+            agent_query = """Write code to create the following visuals in Manim for this text scene. Make the text and equations appear in sync with the narration
+
+Scene Info: """+scene.info+"""
+
+Script: """+script.script+"""
+
+Animation Timing: """+str(script.animation_times)+f"""
+
+The animation should last for no longer than {duration_seconds} seconds, even if that time table doesn't agree with the animation timing."""
 
         if len(errors) > 0:
             agent_query += f"\n\nYou failed at this task when you attempted it previously. Here are the errors your past attempts have generated.: {errors}"
@@ -264,11 +326,11 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
         subprocess.call(["ffmpeg", "-i", f"media/videos/1080p60/VideoVisual_{segment}.mp4", "-i", f"en-US-Studio-M_{segment}.wav", "-c:v", "copy", "-filter:a", "aresample=async=1", "-c:a", "flac", "-strict", "-2", f"final_{segment}.mp4"])
 
 @app.route('/generatevideo', methods=['POST'])
-def main():
-    req_body = request.get_json()
-    user_request = req_body['request']
+def main(request):
+    # req_body = request.get_json()
+    # user_request = req_body['request']
 
-    # user_request = request
+    user_request = request
 
     # generate storyboard
     template="""You are an AI generating a video for a service called GPTeach. You do not have access to any visuals not generated by manim. Generate a concise storyboard that helps to explain the following concept/answer the provided question in the STYLE of a khan academy video. 
@@ -339,10 +401,10 @@ You should answer in the following format: {formatting_instructions}"""
     video_url = blob.public_url
     print(video_url)
 
-    return jsonify({"status": "success", "video_url": video_url}), 200
+    # return jsonify({"status": "success", "video_url": video_url}), 200
 
-# main("What is a vector field in calculus? Give a couple examples of different vector fields.")
+main("What is a vector field in calculus?")
 # main("Explain long division")
 
-if __name__ == "__main__":
-    app.run(debug=True)
+# if __name__ == "__main__":
+#     app.run(debug=True)
