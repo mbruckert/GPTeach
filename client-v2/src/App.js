@@ -25,6 +25,7 @@ function App() {
   const [loadedVideo, setLoadedVideo] = useState(false);
   const [loadedAnswer, setLoadedAnswer] = useState(false);
   const [videoUrl, setVideoUrl] = useState("");
+  const [correctionVideo, setCorrectionVideo] = useState("");
 
   const { width, height } = useWindowSize()
 
@@ -100,6 +101,8 @@ function App() {
             setTimeout(() => {
               setShowConfetti(false);
             }, 5000);
+          } else{
+            generateIncorrectVideo();
           }
     
           setValidatedAnswer(output);
@@ -122,6 +125,21 @@ function App() {
       setLoadedVideo(true);
       setVideoUrl(data.video_url);
       toast.success('Your video has been generated!');
+    }).catch((error) => {
+      toast.error('There was an error generating your video, please try again.');
+    });
+  }
+
+  async function generateIncorrectVideo(){
+    fetch("https://generatevideo-ahaig2rvna-uc.a.run.app/generatevideo", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({"request": "The following is a question: " + question + ". The correct answer is: " + correctAnswer + ". The answer you selected is: " + selectedOption + ". The explanation for why the correct answer is correct is: " + validatedAnswer.explanation + ". Explain why the selected answer is wrong and why the correct answer is correct. MAKE IT ONE SCENE ONLY."})
+    }).then((response) => response.json()).then((data) => {
+      setCorrectionVideo(data.video_url);
+      toast.success('Your response video has been generated!');
     }).catch((error) => {
       toast.error('There was an error generating your video, please try again.');
     });
@@ -235,7 +253,6 @@ function App() {
                   toast.error('You must select an answer choice!');
                 } else{
                   toast.promise(checkAnswer(question, answerChoices, selectedOption), {loading: "Checking your answer with Wolfram Alpha, please wait a moment...", success: "Your answer has been checked!", error: "There was an error checking your answer, please try again."});
-                  checkAnswer(question, answerChoices, selectedOption);
                 }
               }} onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.63)'} onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.43)'} style={{borderRadius: "10px", border: "1px solid #127C01", background: "rgba(255, 255, 255, 0.43)", fontWeight: '700', color: '#127C01', height: '40px', fontSize: '18px', marginTop: '15px', width: '150%', cursor: 'pointer'}}>Check my Answer</button>
 
@@ -243,6 +260,11 @@ function App() {
                 <div style={{backgroundColor: 'white', padding: '5px', width: '180%', borderRadius: '10px', textAlign: 'center'}}><h3>Your Answer is... {validatedAnswer.correct == "true" ? <span style={{color: '#127C01'}}>Correct!</span> : <span style={{color: '#C11111'}}>Incorrect :(</span>}</h3></div>
                 {validatedAnswer.correct == "false" && <h4 style={{width: '150%'}}>Correct Answer: {validatedAnswer.correctAnswer}</h4>}
                 {validatedAnswer.correct == "false" && <h4 style={{width: '150%'}}>Explanation: {validatedAnswer.explanation}</h4>}
+                {validatedAnswer.correct == "false" && correctionVideo !== "" && <Player>
+                    <BigPlayButton position="center" />
+                    <source src={correctionVideo} />
+                  </Player>}
+                {validatedAnswer.correct == "false" && correctionVideo == "" && <div style={{display: 'flex', alignItems: 'center'}}><Spinner /></div>}
                 <h4 style={{width: '200%'}}>Answer Verified by Wolfram Alpha</h4>
               </div>}
             </div>
