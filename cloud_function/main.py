@@ -4,7 +4,7 @@ import subprocess
 from typing import Sequence
 import os
 import shutil
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = "shellhacks-2023-042c64c6e9eb.json"
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = "gpteach-demo-69da0607e7a2.json"
 import google.cloud.texttospeech as tts
 from typing import List
 from langchain.llms import OpenAI
@@ -161,6 +161,8 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
 
             if os.path.isfile(f"media/videos/1080p60/VideoVisual_{segment}.mp4"):
                 segment_generated = True
+            else:
+                retries += 1
         except Exception as e:
             errors.append(str(e))
             retries += 1
@@ -176,7 +178,7 @@ ANSWER (PYTHON CODE ONLY, NO OTHER TEXT OR COMMENTARY OR MARKDOWN):"""
         # final_video.write_videofile(f"final_{segment}.mp4", codec='libx264')
         subprocess.call(["ffmpeg", "-i", f"media/videos/1080p60/VideoVisual_{segment}.mp4", "-i", f"en-US-Studio-M_{segment}.wav", "-c:v", "copy", "-filter:a", "aresample=async=1", "-c:a", "flac", "-strict", "-2", f"final_{segment}.mp4"])
 
-@app.route('/generatevideo', methods=['POST'])
+# @app.route('/generatevideo', methods=['POST'])
 def main(request):
     # req_body = request.get_json()
     # user_request = req_body['request']
@@ -195,6 +197,9 @@ def main(request):
 
     storyboard = parser.parse(chat(chat_prompt.format_prompt(formatting_instructions=parser.get_format_instructions(), text=user_request).to_messages()).content)
     segments, scenes = zip(*enumerate(storyboard.scenes))
+
+    print(segments)
+    print(scenes)
 
     # delete old media
     if os.path.exists("media") and os.path.isdir("media"):
@@ -249,8 +254,8 @@ def main(request):
     # return jsonify({"status": "success", "video_url": video_url}), 200
 
 # main("What is a vector field in calculus? Give a couple examples of different vector fields.")
-# main("Explain hydrogen bonding")
-main("Explain the concept of a turing machine")
+main("Explain hydrogen bonding")
+# main("Explain the concept of a turing machine")
 
 # if __name__ == "__main__":
 #     app.run(debug=True)
